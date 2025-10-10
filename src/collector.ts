@@ -44,7 +44,8 @@ const DEFAULT_OPTIONS = {
         'google_analytics_events',
         'key_logging',
         'session_recorders',
-        'third_party_trackers'
+        'third_party_trackers',
+        'tk_pixel_events'
     ],
     puppeteerExecutablePath: null as string | null,
     extraChromiumArgs: ['--disable-features=TrackingProtection3pcd'] as string[],

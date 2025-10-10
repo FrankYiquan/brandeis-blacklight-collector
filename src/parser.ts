@@ -1,11 +1,13 @@
 import { getDomain } from 'tldts';
 import { getCanvasFontFingerprinters, getCanvasFingerprinters } from './canvas-fingerprinting';
 import { loadBrowserCookies, matchCookiesToEvents } from './inspectors/cookies';
-import { 
-    BEHAVIOUR_TRACKING_EVENTS, 
-    FINGERPRINTABLE_WINDOW_APIS, 
-    FB_ADVANCED_MATCHING_PARAMETERS, 
+import {
+    BEHAVIOUR_TRACKING_EVENTS,
+    FINGERPRINTABLE_WINDOW_APIS,
+    FB_ADVANCED_MATCHING_PARAMETERS,
     FB_STANDARD_EVENTS,
+    TK_STANDARD_EVENTS,
+    TK_ADVANCED_MATCHING_PARAMETERS,
 } from './helpers/statics';
 import {
     BlacklightEvent,
@@ -14,11 +16,11 @@ import {
     SessionRecordingEvent,
     TrackingRequestEvent,
 } from './types';
-import { 
-    getScriptUrl, 
-    groupBy, 
-    loadJSONSafely, 
-    hasOwnProperty, 
+import {
+    getScriptUrl,
+    groupBy,
+    loadJSONSafely,
+    hasOwnProperty,
 } from './helpers/utils';
 
 export const generateReport = (reportType, messages, dataDir, url) => {
@@ -44,6 +46,8 @@ export const generateReport = (reportType, messages, dataDir, url) => {
             return reportSessionRecorders(eventData);
         case 'third_party_trackers':
             return reportThirdPartyTrackers(eventData, url);
+        case 'tk_pixel_events':
+            return reportTKPixelEvents(eventData);
         default:
             return {};
     }
@@ -85,6 +89,9 @@ const getEventData = (reportType, messages): BlacklightEvent[] => {
             filtered = filterByEvent(messages, 'TrackingRequest');
             break;
         case 'google_analytics_events':
+            filtered = filterByEvent(messages, 'TrackingRequest');
+            break;
+        case 'tk_pixel_events':
             filtered = filterByEvent(messages, 'TrackingRequest');
             break;
         default:
@@ -230,7 +237,7 @@ const reportThirdPartyTrackers = (eventData: BlacklightEvent[], firstPartyDomain
 
 const reportGoogleAnalyticsEvents = (eventData: BlacklightEvent[]) => {
     const googleAnalyticsEvents = eventData.filter((event: TrackingRequestEvent) => {
-        return event.url.includes('stats.g.doubleclick') 
+        return event.url.includes('stats.g.doubleclick')
             && (
                 event.url.includes('UA-') // old version of google ids
                 || event.url.includes('G-') // this and following are new version
@@ -310,4 +317,67 @@ const getDomainSafely = (message: KeyLoggingEvent) => {
     } catch (error) {
         return '';
     }
+};
+
+const reportTKPixelEvents = (eventData: BlacklightEvent[]) => {
+    const TK_events = eventData.filter((event: TrackingRequestEvent) => {
+        const url = event.url || '';
+        return /tiktok\.com/i.test(url);
+    });
+    console.log(`[TikTokDetector] Found ${TK_events.length} candidate events`);
+
+    return TK_events.map((e: TrackingRequestEvent) => {
+        const result: any = {
+            url: e.url,
+            type: e.type,
+            filter: e.data?.filter || null,
+            listName: e.data?.listName || null,
+            rawQuery: e.data?.query || {},
+            hasQueryParams: false,
+            parsedQueryParams: [],
+        };
+
+        const urlObj = new URL(e.url);
+        const searchParams = Object.fromEntries(urlObj.searchParams.entries());
+        if (Object.keys(searchParams).length > 0) {
+            result.hasQueryParams = true;
+            result.parsedQueryParams = Object.entries(searchParams).map(([key, value]) => {
+                let isStandard = false;
+                let eventName = null;
+                let description = null;
+                let advancedMatchingParams = [];
+                const standardEvent = TK_STANDARD_EVENTS.filter(f => f.eventName === key);
+                const advancedDesc = TK_ADVANCED_MATCHING_PARAMETERS[key] || null;
+                if (standardEvent.length > 0) {
+                    isStandard = true;
+                    eventName = standardEvent[0].eventName;
+                    description = standardEvent[0].description;
+                } else {
+                    eventName = key as string;
+                }
+                if (advancedDesc != null) {
+                    if (advancedMatchingParams.some(s => s.key === key)) {
+                        advancedMatchingParams.push({ key, value});
+                    }
+                }
+                return {
+                    isStandard,
+                    eventName,
+                    value,
+                    description,
+                    advancedMatchingParams,
+                };
+            });
+        }
+
+
+        if (e.stack && Array.isArray(e.stack)) {
+            result.stackInfo = e.stack.map(s => ({
+                fileName: s.fileName || null,
+                source: s.source || null
+            }));
+        }
+
+        return result;
+    });
 };
